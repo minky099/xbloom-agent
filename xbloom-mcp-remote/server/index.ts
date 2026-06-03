@@ -1,9 +1,8 @@
-// XBloom MCP Server — Supabase Edge Function
+// XBloom MCP Server — self-contained Deno app (run via Docker)
 // Remote MCP server for Claude mobile/web/desktop
 // Multi-user: each user logs in with their own XBloom account via xbloom_login tool
-// Credentials (NOT passwords) are AES-encrypted and stored in Supabase DB with RLS
+// Credentials (NOT passwords) are AES-encrypted and stored in a local Deno KV store
 
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { Buffer } from "node:buffer";
 import { publicEncrypt, constants, createCipheriv, createDecipheriv, randomBytes, createHmac } from "node:crypto";
 
@@ -29,22 +28,13 @@ const API_HEADERS: Record<string, string> = {
 
 // --- AES encryption for stored credentials ---
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
-const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-
-// Storage backend selection:
-//   - Supabase Postgres (REST) when SUPABASE_URL + service key are set (hosted Edge Function)
-//   - otherwise a self-contained, file-backed Deno KV store (Docker / self-host)
-const USE_SUPABASE = SUPABASE_URL !== "" && SUPABASE_SERVICE_KEY !== "";
-
 // Secret used to derive the AES key for encrypting stored sessions.
-// On Supabase it defaults to the service role key (behavior unchanged).
-// When self-hosting, set SESSION_ENCRYPTION_KEY to a long random string.
-const ENCRYPTION_SECRET = Deno.env.get("SESSION_ENCRYPTION_KEY") || SUPABASE_SERVICE_KEY;
+// Set SESSION_ENCRYPTION_KEY to a long random string, e.g. `openssl rand -hex 32`.
+const ENCRYPTION_SECRET = Deno.env.get("SESSION_ENCRYPTION_KEY") || "";
 
 function getEncryptionKey(): Buffer {
   const secret = ENCRYPTION_SECRET;
-  if (!secret) throw new Error("SESSION_ENCRYPTION_KEY (or SUPABASE_SERVICE_ROLE_KEY) is required");
+  if (!secret) throw new Error("SESSION_ENCRYPTION_KEY is required");
   return Buffer.from(createHmac("sha256", secret).update("xbloom-mcp-encryption-key").digest());
 }
 
@@ -78,8 +68,7 @@ function decryptCredentials(blob: string): UserCredentials | null {
   }
 }
 
-// --- Session storage (encrypted at rest) ---
-// Supabase Postgres (REST, RLS-protected) when configured, otherwise local Deno KV.
+// --- Session storage (encrypted at rest, file-backed Deno KV) ---
 
 let kvPromise: Promise<Deno.Kv> | null = null;
 function getKv(): Promise<Deno.Kv> {
@@ -94,46 +83,16 @@ function getKv(): Promise<Deno.Kv> {
 
 async function storeSession(accessToken: string, creds: UserCredentials): Promise<boolean> {
   const encrypted = encryptCredentials(creds);
-
-  if (!USE_SUPABASE) {
-    const kv = await getKv();
-    const res = await kv.set(["user_sessions", accessToken], encrypted);
-    return res.ok;
-  }
-
-  const resp = await fetch(`${SUPABASE_URL}/rest/v1/user_sessions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": SUPABASE_SERVICE_KEY,
-      "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
-      "Prefer": "resolution=merge-duplicates",
-    },
-    body: JSON.stringify({ access_token: accessToken, encrypted_creds: encrypted }),
-  });
-  return resp.ok;
+  const kv = await getKv();
+  const res = await kv.set(["user_sessions", accessToken], encrypted);
+  return res.ok;
 }
 
 async function getSession(accessToken: string): Promise<UserCredentials | null> {
-  if (!USE_SUPABASE) {
-    const kv = await getKv();
-    const res = await kv.get<string>(["user_sessions", accessToken]);
-    if (!res.value) return null;
-    return decryptCredentials(res.value);
-  }
-
-  const resp = await fetch(
-    `${SUPABASE_URL}/rest/v1/user_sessions?access_token=eq.${encodeURIComponent(accessToken)}&select=encrypted_creds`,
-    {
-      headers: {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
-      },
-    },
-  );
-  const rows = await resp.json();
-  if (!Array.isArray(rows) || rows.length === 0) return null;
-  return decryptCredentials(rows[0].encrypted_creds);
+  const kv = await getKv();
+  const res = await kv.get<string>(["user_sessions", accessToken]);
+  if (!res.value) return null;
+  return decryptCredentials(res.value);
 }
 
 // --- RSA Encryption (hutool-style chunking) ---
@@ -702,11 +661,10 @@ async function handleToken(req: Request): Promise<Response> {
 
 // --- Main handler ---
 
-// Public URL where this server is reachable. Override via MCP_BASE_URL when
-// self-hosting (e.g. behind your own domain in Docker). Defaults to the hosted
-// Supabase Edge Function so the existing deployment keeps working unchanged.
-const BASE_URL = Deno.env.get("MCP_BASE_URL") ||
-  "https://ramaokxdyszcqpqxmosv.supabase.co/functions/v1/xbloom-mcp";
+// Public URL where this server is reachable, used for OAuth discovery metadata.
+// Set MCP_BASE_URL to your own domain when self-hosting behind a reverse proxy.
+// Defaults to the local Docker port.
+const BASE_URL = Deno.env.get("MCP_BASE_URL") || "http://localhost:2566";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -759,14 +717,13 @@ async function handleMcpMessage(body: Record<string, unknown>, accessToken: stri
   }
 }
 
-// Port to listen on. Defaults to 8000 (Supabase Edge Runtime default); the
-// Docker image overrides this with PORT=2566 ("BLOOM" on a phone keypad).
-const SERVE_PORT = Number(Deno.env.get("PORT") || "8000");
+// Port to listen on. Defaults to 2566 ("BLOOM" on a phone keypad).
+const SERVE_PORT = Number(Deno.env.get("PORT") || "2566");
 
 if (!ENCRYPTION_SECRET) {
   console.warn("[xbloom-mcp] WARNING: no SESSION_ENCRYPTION_KEY set — session storage will fail. Set it to a long random string.");
 }
-console.log(`[xbloom-mcp] storage backend: ${USE_SUPABASE ? "supabase" : "local Deno KV"}, port ${SERVE_PORT}`);
+console.log(`[xbloom-mcp] listening on port ${SERVE_PORT}`);
 
 Deno.serve({ port: SERVE_PORT }, async (req: Request) => {
   const url = new URL(req.url);

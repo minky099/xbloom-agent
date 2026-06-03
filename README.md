@@ -10,10 +10,11 @@ No coding needed. Works on Claude desktop, mobile, and web.
 
 ### Step 1: Connect to Claude
 
-Open Claude and add this server URL in your integrations settings:
+Open Claude and add your server URL in your integrations settings (this is the
+URL of your own deployment — see [Self-Hosting with Docker](#self-hosting-with-docker)):
 
 ```
-https://ramaokxdyszcqpqxmosv.supabase.co/functions/v1/xbloom-mcp
+https://your-server.example/
 ```
 
 **Where to find it:**
@@ -79,9 +80,10 @@ Everything below is for developers who want to self-host or modify the server.
 
 ### Tech Stack
 
-- **Runtime**: Deno 2.x on Supabase Edge Functions
+- **Runtime**: Deno 2.x (self-contained, runs anywhere via Docker)
 - **Protocol**: MCP 2.0 (Streamable HTTP + SSE)
 - **Auth**: OAuth 2.0 + per-user XBloom login
+- **Storage**: file-backed Deno KV (no external database)
 - **Encryption**: AES-256-CBC (sessions) + RSA (API payloads, XBloom's key)
 
 ### MCP Tools
@@ -96,47 +98,10 @@ Everything below is for developers who want to self-host or modify the server.
 | `xbloom_delete_recipe` | Permanently remove a recipe |
 | `xbloom_fetch_recipe` | Import a recipe from a share URL |
 
-### Self-Hosting
+### Self-Hosting with Docker
 
-#### Prerequisites
-
-- [Supabase CLI](https://supabase.com/docs/guides/cli/getting-started)
-- [Deno 2.x](https://deno.com)
-
-#### 1. Clone and deploy
-
-```bash
-git clone https://github.com/denull0/xbloom-agent.git
-cd xbloom-agent/xbloom-mcp-remote
-supabase functions deploy xbloom-mcp --no-verify-jwt
-```
-
-#### 2. Create the sessions table
-
-```sql
-CREATE TABLE user_sessions (
-  access_token TEXT PRIMARY KEY,
-  encrypted_creds TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-ALTER TABLE user_sessions ENABLE ROW LEVEL SECURITY;
-```
-
-No environment variables needed — the server uses `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` which are automatically available in edge functions.
-
-#### 3. Connect Claude
-
-Add your server URL in Claude integrations:
-
-```
-https://<your-project>.supabase.co/functions/v1/xbloom-mcp
-```
-
-### Run with Docker
-
-The MCP server is a single self-contained Deno app, so you can run it as a
-container instead of deploying to Supabase Edge Functions. **No external
-database is required** — sessions are stored in a file-backed
+The MCP server is a single self-contained Deno app. **No external database is
+required** — sessions are stored in a file-backed
 [Deno KV](https://docs.deno.com/deploy/kv/manual/) store inside the container.
 Mount a volume at `/data` to persist them across restarts.
 
@@ -173,13 +138,9 @@ docker run -d -p 2566:2566 \
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `SESSION_ENCRYPTION_KEY` | yes | Secret used to derive the AES key that encrypts stored sessions. Use a long random string. Changing it invalidates existing sessions (users must log in again) |
-| `MCP_BASE_URL` | no | Public URL the server is reachable at, used for OAuth discovery metadata. Set to your own domain when self-hosting; defaults to the hosted Supabase URL |
+| `MCP_BASE_URL` | no | Public URL the server is reachable at, used for OAuth discovery metadata. Set to your own domain when self-hosting; defaults to `http://localhost:2566` |
 | `PORT` | no | Port to listen on (default `2566` in the image) |
 | `KV_PATH` | no | Path to the Deno KV session file (default `/data/xbloom-kv.sqlite` in the image) |
-
-> **Note:** if you instead set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`,
-> the server uses Supabase Postgres for session storage (the hosted setup).
-> Leave them unset to use the built-in Deno KV store.
 
 > Put the container behind a TLS-terminating reverse proxy (Caddy, nginx,
 > Traefik, …) and point `MCP_BASE_URL` at the public HTTPS URL. Then add that
@@ -221,10 +182,9 @@ xbloom-agent/
 ├── docker-compose.yml                      # One-command local/self-host run
 ├── .env.example                            # Env vars for Docker
 ├── xbloom-mcp-remote/
-│   └── supabase/
-│       ├── config.toml                     # Supabase project config
-│       └── functions/
-│           └── xbloom-mcp/index.ts         # MCP server (OAuth + tools + SSE)
+│   └── server/
+│       ├── deno.json                       # Deno config (enables KV)
+│       └── index.ts                        # MCP server (OAuth + tools + SSE + KV storage)
 └── xbloom-recipes/
     └── claude-project/
         ├── custom-instructions.md          # Claude project instructions
@@ -234,8 +194,8 @@ xbloom-agent/
 ### Security
 
 - Passwords are **never stored** — used once for XBloom API login, then discarded
-- Session tokens are **AES-256 encrypted** at rest using HMAC-SHA256 derived keys
-- Database table has **Row Level Security** — only the server can access it
+- Session tokens are **AES-256 encrypted** at rest using an HMAC-SHA256 derived key
+- The encryption key comes from `SESSION_ENCRYPTION_KEY`, kept out of the codebase
 - Error messages are sanitized — no internal API details leaked
 
 ## License

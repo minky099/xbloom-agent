@@ -8,9 +8,9 @@ FROM denoland/deno:2.1.4
 
 WORKDIR /app
 
-# The MCP server is a single self-contained file plus its import map.
-COPY xbloom-mcp-remote/supabase/functions/xbloom-mcp/deno.json ./deno.json
-COPY xbloom-mcp-remote/supabase/functions/xbloom-mcp/index.ts ./index.ts
+# The MCP server is a single self-contained file plus its Deno config.
+COPY xbloom-mcp-remote/server/deno.json ./deno.json
+COPY xbloom-mcp-remote/server/index.ts ./index.ts
 
 # /data holds the Deno KV session store (mount a volume here to persist it).
 RUN mkdir -p /data && chown -R deno:deno /app /data
