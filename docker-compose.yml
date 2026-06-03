@@ -4,18 +4,25 @@ services:
     image: xbloom-mcp:latest
     container_name: xbloom-mcp
     ports:
-      - "8000:8000"
+      # Host:container — 2566 spells "BLOOM" on a phone keypad.
+      - "2566:2566"
     environment:
-      # Required: Supabase project used for encrypted session storage.
-      SUPABASE_URL: ${SUPABASE_URL}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
-      # Optional: public URL this server is reachable at (for OAuth discovery).
-      # Leave unset to fall back to the hosted default.
+      # Required: secret used to encrypt stored sessions at rest.
+      # Use a long random string, e.g. `openssl rand -hex 32`.
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY}
+      # Optional: public URL this server is reachable at (OAuth discovery).
+      # Leave unset for local use.
       MCP_BASE_URL: ${MCP_BASE_URL:-}
+    volumes:
+      # Persist the self-contained Deno KV session store across restarts.
+      - xbloom-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "deno", "eval", "-A", "const r = await fetch('http://localhost:8000/'); if (!r.ok) Deno.exit(1);"]
+      test: ["CMD", "deno", "eval", "-A", "const r = await fetch('http://localhost:2566/'); if (!r.ok) Deno.exit(1);"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+volumes:
+  xbloom-data:

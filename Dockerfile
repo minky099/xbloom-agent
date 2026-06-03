@@ -1,7 +1,8 @@
 # XBloom MCP Server — Docker image
 # Runs the self-contained Deno MCP server (OAuth + SSE + Streamable HTTP).
-# Session persistence still uses Supabase (REST API), so provide SUPABASE_URL
-# and SUPABASE_SERVICE_ROLE_KEY at runtime. See README "Run with Docker".
+# Sessions are stored in a self-contained, file-backed Deno KV store — no
+# external database required. Set SESSION_ENCRYPTION_KEY at runtime and mount
+# a volume at /data to persist sessions. See README "Run with Docker".
 
 FROM denoland/deno:2.1.4
 
@@ -11,14 +12,21 @@ WORKDIR /app
 COPY xbloom-mcp-remote/supabase/functions/xbloom-mcp/deno.json ./deno.json
 COPY xbloom-mcp-remote/supabase/functions/xbloom-mcp/index.ts ./index.ts
 
-# Cache dependencies as the non-root "deno" user so the runtime can read them.
-RUN chown -R deno:deno /app
+# /data holds the Deno KV session store (mount a volume here to persist it).
+RUN mkdir -p /data && chown -R deno:deno /app /data
 USER deno
+
+# Cache dependencies as the non-root "deno" user so the runtime can read them.
 RUN deno cache index.ts
 
-# Deno.serve() listens on 0.0.0.0:8000 by default.
-EXPOSE 8000
+# Port 2566 spells "BLOOM" on a phone keypad (B-L-O-O = 2-5-6-6).
+ENV PORT=2566
+ENV KV_PATH=/data/xbloom-kv.sqlite
+EXPOSE 2566
+VOLUME ["/data"]
 
-# --allow-net: serve + outbound fetch to XBloom/Supabase APIs
-# --allow-env: read SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / MCP_BASE_URL
-CMD ["deno", "run", "--allow-net", "--allow-env", "index.ts"]
+# --allow-net:   serve + outbound fetch to the XBloom API
+# --allow-env:   read PORT / KV_PATH / SESSION_ENCRYPTION_KEY / MCP_BASE_URL
+# --allow-read / --allow-write: local Deno KV store file
+# --unstable-kv: enables Deno.openKv()
+CMD ["deno", "run", "--allow-net", "--allow-env", "--allow-read", "--allow-write", "--unstable-kv", "index.ts"]

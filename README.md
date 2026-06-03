@@ -135,22 +135,25 @@ https://<your-project>.supabase.co/functions/v1/xbloom-mcp
 ### Run with Docker
 
 The MCP server is a single self-contained Deno app, so you can run it as a
-container instead of deploying to Supabase Edge Functions. Session storage
-still uses Supabase's REST API, so you need a Supabase project with the
-`user_sessions` table (see step 2 above) and its service role key.
+container instead of deploying to Supabase Edge Functions. **No external
+database is required** — sessions are stored in a file-backed
+[Deno KV](https://docs.deno.com/deploy/kv/manual/) store inside the container.
+Mount a volume at `/data` to persist them across restarts.
+
+The container listens on **port 2566** ("BLOOM" on a phone keypad).
 
 #### Build & run with Docker Compose
 
 ```bash
 cp .env.example .env
-# edit .env — set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and (optionally) MCP_BASE_URL
+# edit .env — set SESSION_ENCRYPTION_KEY (e.g. `openssl rand -hex 32`)
 docker compose up -d --build
 ```
 
-The server listens on `http://localhost:8000`. Check it's healthy:
+Check it's healthy:
 
 ```bash
-curl http://localhost:8000/        # -> {"name":"xbloom-mcp","status":"ok"}
+curl http://localhost:2566/        # -> {"name":"xbloom-mcp","status":"ok"}
 docker compose logs -f xbloom-mcp
 ```
 
@@ -158,10 +161,10 @@ docker compose logs -f xbloom-mcp
 
 ```bash
 docker build -t xbloom-mcp .
-docker run -d -p 8000:8000 \
-  -e SUPABASE_URL="https://<your-project>.supabase.co" \
-  -e SUPABASE_SERVICE_ROLE_KEY="<your-service-role-key>" \
+docker run -d -p 2566:2566 \
+  -e SESSION_ENCRYPTION_KEY="$(openssl rand -hex 32)" \
   -e MCP_BASE_URL="https://mcp.example.com" \
+  -v xbloom-data:/data \
   --name xbloom-mcp xbloom-mcp
 ```
 
@@ -169,9 +172,14 @@ docker run -d -p 8000:8000 \
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `SUPABASE_URL` | yes | Supabase project URL (holds the `user_sessions` table) |
-| `SUPABASE_SERVICE_ROLE_KEY` | yes | Service role key; also derives the AES session-encryption key |
+| `SESSION_ENCRYPTION_KEY` | yes | Secret used to derive the AES key that encrypts stored sessions. Use a long random string. Changing it invalidates existing sessions (users must log in again) |
 | `MCP_BASE_URL` | no | Public URL the server is reachable at, used for OAuth discovery metadata. Set to your own domain when self-hosting; defaults to the hosted Supabase URL |
+| `PORT` | no | Port to listen on (default `2566` in the image) |
+| `KV_PATH` | no | Path to the Deno KV session file (default `/data/xbloom-kv.sqlite` in the image) |
+
+> **Note:** if you instead set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`,
+> the server uses Supabase Postgres for session storage (the hosted setup).
+> Leave them unset to use the built-in Deno KV store.
 
 > Put the container behind a TLS-terminating reverse proxy (Caddy, nginx,
 > Traefik, …) and point `MCP_BASE_URL` at the public HTTPS URL. Then add that
