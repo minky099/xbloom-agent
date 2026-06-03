@@ -666,7 +666,11 @@ async function handleToken(req: Request): Promise<Response> {
 
 // --- Main handler ---
 
-const BASE_URL = "https://ramaokxdyszcqpqxmosv.supabase.co/functions/v1/xbloom-mcp";
+// Public URL where this server is reachable. Override via MCP_BASE_URL when
+// self-hosting (e.g. behind your own domain in Docker). Defaults to the hosted
+// Supabase Edge Function so the existing deployment keeps working unchanged.
+const BASE_URL = Deno.env.get("MCP_BASE_URL") ||
+  "https://ramaokxdyszcqpqxmosv.supabase.co/functions/v1/xbloom-mcp";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",

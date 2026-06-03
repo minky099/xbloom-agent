@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+.vscode
+**/.vscode
+**/.temp
+.env
+.env.*
+*.md
+xbloom-recipes
+docker-compose.yml
+.dockerignore
+.gitignore

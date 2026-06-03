@@ -1,0 +1,21 @@
+services:
+  xbloom-mcp:
+    build: .
+    image: xbloom-mcp:latest
+    container_name: xbloom-mcp
+    ports:
+      - "8000:8000"
+    environment:
+      # Required: Supabase project used for encrypted session storage.
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Optional: public URL this server is reachable at (for OAuth discovery).
+      # Leave unset to fall back to the hosted default.
+      MCP_BASE_URL: ${MCP_BASE_URL:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "deno", "eval", "-A", "const r = await fetch('http://localhost:8000/'); if (!r.ok) Deno.exit(1);"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -132,6 +132,55 @@ Add your server URL in Claude integrations:
 https://<your-project>.supabase.co/functions/v1/xbloom-mcp
 ```
 
+### Run with Docker
+
+The MCP server is a single self-contained Deno app, so you can run it as a
+container instead of deploying to Supabase Edge Functions. Session storage
+still uses Supabase's REST API, so you need a Supabase project with the
+`user_sessions` table (see step 2 above) and its service role key.
+
+#### Build & run with Docker Compose
+
+```bash
+cp .env.example .env
+# edit .env — set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and (optionally) MCP_BASE_URL
+docker compose up -d --build
+```
+
+The server listens on `http://localhost:8000`. Check it's healthy:
+
+```bash
+curl http://localhost:8000/        # -> {"name":"xbloom-mcp","status":"ok"}
+docker compose logs -f xbloom-mcp
+```
+
+#### Or with plain Docker
+
+```bash
+docker build -t xbloom-mcp .
+docker run -d -p 8000:8000 \
+  -e SUPABASE_URL="https://<your-project>.supabase.co" \
+  -e SUPABASE_SERVICE_ROLE_KEY="<your-service-role-key>" \
+  -e MCP_BASE_URL="https://mcp.example.com" \
+  --name xbloom-mcp xbloom-mcp
+```
+
+#### Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SUPABASE_URL` | yes | Supabase project URL (holds the `user_sessions` table) |
+| `SUPABASE_SERVICE_ROLE_KEY` | yes | Service role key; also derives the AES session-encryption key |
+| `MCP_BASE_URL` | no | Public URL the server is reachable at, used for OAuth discovery metadata. Set to your own domain when self-hosting; defaults to the hosted Supabase URL |
+
+> Put the container behind a TLS-terminating reverse proxy (Caddy, nginx,
+> Traefik, …) and point `MCP_BASE_URL` at the public HTTPS URL. Then add that
+> URL in Claude integrations:
+>
+> ```
+> https://mcp.example.com
+> ```
+
 ### Recipe Parameters
 
 **Coffee** (Omni dripper):
@@ -160,6 +209,9 @@ https://<your-project>.supabase.co/functions/v1/xbloom-mcp
 
 ```
 xbloom-agent/
+├── Dockerfile                              # Container image for the MCP server
+├── docker-compose.yml                      # One-command local/self-host run
+├── .env.example                            # Env vars for Docker
 ├── xbloom-mcp-remote/
 │   └── supabase/
 │       ├── config.toml                     # Supabase project config
