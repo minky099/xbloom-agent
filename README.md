@@ -141,6 +141,9 @@ docker run -d -p 2566:2566 \
 | `MCP_BASE_URL` | no | Public URL the server is reachable at, used for OAuth discovery metadata. Set to your own domain when self-hosting; defaults to `http://localhost:2566` |
 | `PORT` | no | Port to listen on (default `2566` in the image) |
 | `KV_PATH` | no | Path to the Deno KV session file (default `/data/xbloom-kv.sqlite` in the image) |
+| `ALLOWED_EMAILS` | no | Comma-separated allowlist of XBloom emails permitted to log in. **Recommended when exposed publicly** — locks the server to your own account so it can't be abused as a login relay. Empty = allow any |
+| `RATE_LIMIT_MAX` | no | Max requests per IP per window before `429` (default `120`) |
+| `RATE_LIMIT_WINDOW_MS` | no | Rate-limit window in ms (default `60000`) |
 
 > Put the container behind a TLS-terminating reverse proxy (Caddy, nginx,
 > Traefik, …) and point `MCP_BASE_URL` at the public HTTPS URL. Then add that
@@ -149,6 +152,22 @@ docker run -d -p 2566:2566 \
 > ```
 > https://mcp.example.com
 > ```
+
+#### Exposing it publicly? Read this
+
+To use Claude **web or mobile**, the server must be reachable from the internet
+(Anthropic's cloud connects to it — `localhost` won't work). When exposed:
+
+- **Always serve over HTTPS** (a reverse proxy or tunnel like Cloudflare Tunnel
+  provides this) — `xbloom_login` sends your password, so plaintext HTTP would
+  leak it in transit.
+- **Set `ALLOWED_EMAILS`** to your own XBloom email so strangers can't use your
+  server as a login relay.
+- Rate limiting is on by default (`RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS`).
+
+Your XBloom recipes are not directly exposed: every connection starts with an
+empty session, and nothing works until someone logs in with *your* XBloom
+credentials.
 
 ### Recipe Parameters
 

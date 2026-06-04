@@ -13,6 +13,11 @@ services:
       # Optional: public URL this server is reachable at (OAuth discovery).
       # Leave unset for local use.
       MCP_BASE_URL: ${MCP_BASE_URL:-}
+      # Optional: lock logins to your own XBloom account(s) when exposed publicly.
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
+      # Optional: per-IP rate limit.
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-120}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
     volumes:
       # Persist the self-contained Deno KV session store across restarts.
       - xbloom-data:/data

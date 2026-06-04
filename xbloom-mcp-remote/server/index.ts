@@ -38,6 +38,61 @@ function getEncryptionKey(): Buffer {
   return Buffer.from(createHmac("sha256", secret).update("xbloom-mcp-encryption-key").digest());
 }
 
+// --- Abuse protection (rate limiting + login allowlist) ---
+
+// Optional allowlist of XBloom emails permitted to log in. Comma-separated.
+// When empty, any email may log in (open). Set ALLOWED_EMAILS to lock the
+// server down to your own account so it can't be abused as a login relay.
+const ALLOWED_EMAILS = new Set(
+  (Deno.env.get("ALLOWED_EMAILS") || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e !== ""),
+);
+
+function isEmailAllowed(email: string): boolean {
+  if (ALLOWED_EMAILS.size === 0) return true;
+  return ALLOWED_EMAILS.has(email.trim().toLowerCase());
+}
+
+// Simple in-memory sliding-window rate limiter, keyed by client IP.
+// RATE_LIMIT_MAX requests allowed per RATE_LIMIT_WINDOW_MS per key.
+const RATE_LIMIT_WINDOW_MS = Number(Deno.env.get("RATE_LIMIT_WINDOW_MS") || "60000");
+const RATE_LIMIT_MAX = Number(Deno.env.get("RATE_LIMIT_MAX") || "120");
+// Cap on concurrent SSE streams to prevent memory exhaustion.
+const MAX_SSE_SESSIONS = Number(Deno.env.get("MAX_SSE_SESSIONS") || "200");
+
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+// Returns true if the request is allowed, false if the limit is exceeded.
+function rateLimitOk(key: string): boolean {
+  const now = Date.now();
+  const bucket = rateBuckets.get(key);
+  if (!bucket || now >= bucket.resetAt) {
+    // Opportunistically evict expired buckets so the map can't grow unbounded
+    // (e.g. from spoofed X-Forwarded-For values).
+    if (rateBuckets.size > 10000) {
+      for (const [k, b] of rateBuckets) {
+        if (now >= b.resetAt) rateBuckets.delete(k);
+      }
+    }
+    rateBuckets.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  bucket.count++;
+  return bucket.count <= RATE_LIMIT_MAX;
+}
+
+function clientIp(req: Request, info?: Deno.ServeHandlerInfo): string {
+  // Honor a single reverse-proxy / tunnel hop (Cloudflare, nginx, …).
+  const fwd = req.headers.get("cf-connecting-ip") ||
+    (req.headers.get("x-forwarded-for") || "").split(",")[0].trim();
+  if (fwd) return fwd;
+  const addr = info?.remoteAddr;
+  if (addr && addr.transport === "tcp") return addr.hostname;
+  return "unknown";
+}
+
 interface UserCredentials {
   memberId: number;
   token: string;
@@ -326,6 +381,11 @@ function buildPourList(pours: Pour[]) {
 }
 
 async function loginXbloom(args: Record<string, unknown>, accessToken: string): Promise<string> {
+  const email = (args.email as string) || "";
+  if (!isEmailAllowed(email)) {
+    return `This account is not allowed to log in on this server.`;
+  }
+
   const resp = await postPlain("tMemberLogin.thtml", {
     interfaceVersion: 20240918,
     skey: "testskey",
@@ -725,12 +785,20 @@ if (!ENCRYPTION_SECRET) {
 }
 console.log(`[xbloom-mcp] listening on port ${SERVE_PORT}`);
 
-Deno.serve({ port: SERVE_PORT }, async (req: Request) => {
+Deno.serve({ port: SERVE_PORT }, async (req: Request, info: Deno.ServeHandlerInfo) => {
   const url = new URL(req.url);
   const path = url.pathname;
 
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
+  }
+
+  // Per-IP rate limit (preflight already returned above).
+  if (!rateLimitOk(clientIp(req, info))) {
+    return new Response(JSON.stringify({ error: "rate_limited" }), {
+      status: 429,
+      headers: { "Content-Type": "application/json", "Retry-After": "60", ...CORS_HEADERS },
+    });
   }
 
   // Handle DELETE for SSE session cleanup
@@ -775,6 +843,12 @@ Deno.serve({ port: SERVE_PORT }, async (req: Request) => {
   // --- SSE transport ---
   // GET /sse — open SSE stream, send endpoint URL
   if (req.method === "GET" && path.endsWith("/sse")) {
+    if (sseSessions.size >= MAX_SSE_SESSIONS) {
+      return new Response(JSON.stringify({ error: "too_many_sessions" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+      });
+    }
     const accessToken = getSessionKey(req) || "";
     const sessionId = generateToken();
 
